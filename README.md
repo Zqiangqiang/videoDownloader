@@ -13,7 +13,10 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/用户名/仓库名.git
+https://github.com/Zqiangqiang/videoDownloader.git
 
 # 进入项目目录
 cd 仓库名
+
+## 使用说明
+暂未更新
