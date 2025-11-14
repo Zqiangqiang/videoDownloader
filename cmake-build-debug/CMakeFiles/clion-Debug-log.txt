@@ -1,0 +1,8 @@
+/Applications/CLion.app/Contents/bin/cmake/mac/aarch64/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/Applications/CLion.app/Contents/bin/ninja/mac/aarch64/ninja -G Ninja -S /Users/xiang/Desktop/videoDownloader -B /Users/xiang/Desktop/videoDownloader/cmake-build-debug
+-- OpenSSL include dir: /opt/homebrew/opt/openssl@3/include
+-- OpenSSL libraries: /opt/homebrew/opt/openssl@3/lib/libssl.dylib;/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib
+-- CURL include dir: /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/usr/include
+-- CURL libraries: /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/usr/lib/libcurl.tbd
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/xiang/Desktop/videoDownloader/cmake-build-debug

@@ -1,0 +1,3 @@
+/Users/xiang/Desktop/videoDownloader/cmake-build-debug/CMakeFiles/videoDownloader.dir
+/Users/xiang/Desktop/videoDownloader/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/xiang/Desktop/videoDownloader/cmake-build-debug/CMakeFiles/rebuild_cache.dir
