@@ -15,6 +15,16 @@
 #include <QProgressBar>
 #include <QLabel>
 #include <QFileDialog>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QHBoxLayout>
+
+// 更新进度
+void updateProgress(QProgressBar* progress, int value) {
+    QMetaObject::invokeMethod(progress, [=]() {
+        progress->setValue(value);
+    });
+}
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -52,6 +62,10 @@ int main(int argc, char *argv[]) {
     pathLayout->addWidget(tipLabel);
     pathLayout->addWidget(choosePathBtn);
 
+    // 打开文件夹按钮 (与上述两个按钮放在同一布局中)
+    QPushButton *openFolderBtn = new QPushButton("打开文件夹");
+    pathLayout->addWidget(openFolderBtn);
+
     // 加入布局（输入框，下载按钮，标题框，进度条）
     mainLayout->addLayout(inputLayout);
     mainLayout->addWidget(downloadBtn);
@@ -68,6 +82,18 @@ int main(int argc, char *argv[]) {
             QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));
         if (!dir.isEmpty()) {
             tipLabel->setText("下载路径：" + dir);
+        }
+    });
+
+    // 点击按钮打开下载目录
+    QObject::connect(openFolderBtn, &QPushButton::clicked, [=]() {
+        QString path = tipLabel->text();
+        if (path.contains("下载路径：")) {
+            // 如果 tipLabel 文字中包含 "下载路径：" 前缀，需要去掉
+            path = path.replace("下载路径：", "");
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        } else if(path.contains("默认下载路径为桌面")) {
+            QDesktopServices::openUrl((QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation))));
         }
     });
 
@@ -124,40 +150,31 @@ int main(int argc, char *argv[]) {
                 m3u8Downloader m3u8_downloader(item);
                 m3u8_downloader.parseM3U8();
                 //m3u8_downloader.printInfo();
-
-                QMetaObject::invokeMethod(progress, [=]() {
-                    progress->setValue(20);
-                });
+                updateProgress(progress, 20);
 
                 basePath = basePath.back() == '/' ? basePath : basePath + '/';
                 std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
 
                 // 下载所有ts分片
                 m3u8_downloader.DownloadAllSegments(dirPath);
-                QMetaObject::invokeMethod(progress, [=]() {
-                    progress->setValue(60);
-                });
+                updateProgress(progress, 60);
 
                 // 将下载好的所有ts分片进行解密
                 m3u8_downloader.DecryptAllTs();
-                QMetaObject::invokeMethod(progress, [=]() {
-                    progress->setValue(90);
-                });
+                updateProgress(progress, 90);
                 // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
-                bool ret = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
+                bool success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
                 m3u8_downloader.DeleteTemplateFile();
 
-                if (ret) break;
-                QMetaObject::invokeMethod(progress, [=]() {
-                    progress->setValue(0);
-                });
+                if (success) break;
+                updateProgress(progress, 0);
             }
 
             // 下载完成后更新 UI（必须用主线程）
             QMetaObject::invokeMethod(progress, [=]() {
                 progress->setValue(100);
                 downloadBtn->setVisible(true);
-                std::this_thread::sleep_for(std::chrono::seconds(2));
+                choosePathBtn->setVisible(true);
                 progress->setVisible(false);
             });
         });
