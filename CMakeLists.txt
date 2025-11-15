@@ -8,6 +8,11 @@ set(OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3")
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 
+# 告诉 CMake Qt 在哪里
+set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/qt")
+find_package(Qt6 COMPONENTS Widgets REQUIRED Concurrent)
+qt_standard_project_setup()
+
 # 输出openssl和curl信息
 message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
 message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
@@ -28,4 +33,4 @@ add_executable(videoDownloader main.cpp
 # 包含目录
 target_include_directories(videoDownloader PRIVATE ${CURL_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR} downloader)
 # 链接库
-target_link_libraries(videoDownloader PRIVATE ${CURL_LIBRARIES} OpenSSL::Crypto)
+target_link_libraries(videoDownloader PRIVATE ${CURL_LIBRARIES} OpenSSL::Crypto Qt6::Widgets Qt6::Concurrent)

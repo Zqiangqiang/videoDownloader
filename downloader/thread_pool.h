@@ -8,6 +8,7 @@
 #include <vector>
 #include <queue>
 #include <thread>
+#include <chrono>
 #include <mutex>
 #include <condition_variable>
 #include <future>
