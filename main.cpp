@@ -17,6 +17,8 @@
 #include <QFileDialog>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QPlainTextEdit>
+#include <QStringList>
 #include <QHBoxLayout>
 
 int main(int argc, char *argv[]) {
@@ -24,7 +26,7 @@ int main(int argc, char *argv[]) {
 
     QWidget window;
     window.setWindowTitle("Video Downloader");
-    window.resize(400, 150);
+    window.resize(500, 150);
 
     // 主布局
     QVBoxLayout *mainLayout = new QVBoxLayout(&window);
@@ -32,21 +34,39 @@ int main(int argc, char *argv[]) {
     // Label + 输入框
     QHBoxLayout *inputLayout = new QHBoxLayout();
     QLabel *label = new QLabel("请输入 URL:");
-    QLineEdit *urlInput = new QLineEdit();
+    QPlainTextEdit *urlInput = new QPlainTextEdit();
+    // 设置输入框高度为两行
+    QFontMetrics fm(urlInput->font());
+    int height = fm.lineSpacing() * 2 + 6;
+    urlInput->setFixedHeight(height);
+    // 将组件添加到横向栏中
     inputLayout->addWidget(label);
     inputLayout->addWidget(urlInput);
 
     // 下载按钮
     QPushButton *downloadBtn = new QPushButton("下载");
     // 显示下载视频的标题
-    QLabel *titleLabel = new QLabel("视频标题：");
+    QLabel *titleLabel = new QLabel("当前视频标题：");
     titleLabel->setVisible(false);
+    // 允许自动换行
+    titleLabel->setWordWrap(true);
+    // 限制最大宽度，让它不会撑开窗口
+    titleLabel->setMaximumWidth(480);
+    // 设置文本超出自动换行
+    titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
     // 进度条
     QProgressBar *progress = new QProgressBar();
     progress->setRange(0, 100);   // 0 ~ 100%
     progress->setValue(0);
     progress->setVisible(false);
+    // 百分比文字
+    QLabel *percentLabel = new QLabel("0%");
+    percentLabel->setVisible(false);
+    // 水平布局：进度条 + 百分比文本
+    QHBoxLayout *progressLayout = new QHBoxLayout();
+    progressLayout->addWidget(progress);
+    progressLayout->addWidget(percentLabel);
 
     // 下载路径提示 + 选择按钮
     QHBoxLayout *pathLayout = new QHBoxLayout();
@@ -59,12 +79,13 @@ int main(int argc, char *argv[]) {
     QPushButton *openFolderBtn = new QPushButton("打开文件夹");
     pathLayout->addWidget(openFolderBtn);
 
-    // 加入布局（输入框，下载按钮，标题框，进度条）
+    // 加入布局（输入框，下载按钮，标题框，进度条, 路径选择按钮）
     mainLayout->addLayout(inputLayout);
     mainLayout->addWidget(downloadBtn);
+    // 在 URL 输入框和标题之间加 10 像素空白
+    mainLayout->addSpacing(10);
     mainLayout->addWidget(titleLabel);
-    mainLayout->addWidget(progress);
-    mainLayout->addWidget(tipLabel);
+    mainLayout->addLayout(progressLayout);
     mainLayout->addLayout(pathLayout);
 
     window.show();
@@ -96,9 +117,18 @@ int main(int argc, char *argv[]) {
         choosePathBtn->setVisible(false);  // 下载途中禁止修改路径
         titleLabel->setVisible(true);     // 显示标题
         progress->setVisible(true);       // 显示进度条
+        percentLabel->setVisible(true);   // 显示百分比
 
-        // 从输入窗口中获取输入的url
-        QString url = urlInput->text();
+        // 新增支持批量处理链接
+        QString urlsInput = urlInput->toPlainText();
+        QStringList urlList;
+        for (QString line : urlsInput.split('\n', Qt::SkipEmptyParts)) {
+            line = line.trimmed();
+            if (!line.isEmpty())
+                urlList << line;
+        }
+
+        // 设置下载路径
         QString downloadPath;
         if (tipLabel->text() == "（默认下载路径为桌面）") {
             downloadPath = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
@@ -106,83 +136,89 @@ int main(int argc, char *argv[]) {
             downloadPath = tipLabel->text().split("：")[1];
         }
 
-        // 在QT项目中UI界面处于住进程，不能让住进程阻塞，否则UI界面卡住
-        // QtConcurrent异步执行，如果采用&捕获，会造成捕获到已释放对象
-        QtConcurrent::run([=]() {
-            HttpClient hClient(url.toStdString());
-            std::string html = hClient.GetHtmlFromUrl();
-            std::string title = HttpClient::ExtractTitle(html);
+        for (auto& url : urlList) {
+            // 在QT项目中UI界面处于住进程，不能让住进程阻塞，否则UI界面卡住
+            // QtConcurrent异步执行，如果采用&捕获，会造成捕获到已释放对象
+            QtConcurrent::run([=]() {
+                HttpClient hClient(url.toStdString());
+                std::string html = hClient.GetHtmlFromUrl();
+                std::string title = HttpClient::ExtractTitle(html);
 
-            // UI 修改需要切回主线程
-            QMetaObject::invokeMethod(titleLabel, [titleLabel, title]() {
-                titleLabel->setText("视频标题：" + QString::fromStdString(title));
-            });
-
-            std::string basePath = downloadPath.toStdString();
-
-            if (html.empty()) {
-                std::cerr << "Failed to fetch HTML." << std::endl;
-                return 1;
-            }
-
-            // 方案二: 通过m3u8文件下载分片后合成完整视频
-            std::cout << "Extracting m3u8 links..." << std::endl;
-            auto m3u8Urls = hClient.ExtractLinkOfM3U8(html);
-
-            if (m3u8Urls.empty()) {
-                std::cout << "No m3u8 links found." << std::endl;
-                return -1;
-            } else {
-                std::cout << "Found m3u8 URLs:\n";
-                for (const auto& url : m3u8Urls)
-                    std::cout << " - " << url << std::endl;
-            }
-
-            // 进度回调函数
-            std::function<void(int)> updateProgress = [&](int value){
-                QMetaObject::invokeMethod(progress, [=](){
-                    progress->setValue(value);
+                // UI 修改需要切回主线程
+                QMetaObject::invokeMethod(titleLabel, [titleLabel, title]() {
+                    titleLabel->setText("当前视频标题：" + QString::fromStdString(title));
                 });
-            };
 
-            // 解析m3u8文件占比20%，下载所有分片占比50%，合并所有分片占比30%
-            for(auto item: m3u8Urls) {
-                bool success = true;
-                // 解析m3u8文件
-                m3u8Downloader m3u8_downloader(item);
-                m3u8_downloader.parseM3U8();
-                //m3u8_downloader.printInfo();
-                updateProgress(20);
+                std::string basePath = downloadPath.toStdString();
 
-                basePath = basePath.back() == '/' ? basePath : basePath + '/';
-                std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
-
-                // 下载所有ts分片
-                success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
-                if (!success) {
-                    //这里可以做重新下载的操作
-                    std::cout << "当前线路失效，选择其他线路/n";
-                    updateProgress(0);
-                    continue;
+                if (html.empty()) {
+                    std::cerr << "Failed to fetch HTML." << std::endl;
+                    return 1;
                 }
-                // 将下载好的所有ts分片进行解密
-                m3u8_downloader.DecryptAllTs(updateProgress);
 
-                // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
-                success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
-                m3u8_downloader.DeleteTemplateFile();
+                // 方案二: 通过m3u8文件下载分片后合成完整视频
+                std::cout << "Extracting m3u8 links..." << std::endl;
+                auto m3u8Urls = hClient.ExtractLinkOfM3U8(html);
 
-                if (success) break;
-                updateProgress(0); // 下载失败进度归零
-            }
+                if (m3u8Urls.empty()) {
+                    std::cout << "No m3u8 links found." << std::endl;
+                    return -1;
+                } else {
+                    std::cout << "Found m3u8 URLs:\n";
+                    for (const auto& url : m3u8Urls)
+                        std::cout << " - " << url << std::endl;
+                }
 
-            // 下载完成后更新 UI（必须用主线程）
-            QMetaObject::invokeMethod(progress, [=]() {
-                downloadBtn->setVisible(true);
-                choosePathBtn->setVisible(true);
-                progress->setVisible(false);
+                // 进度回调函数（回调当前视频进度）
+                std::function<void(int)> updateProgress = [&](int value){
+                    QMetaObject::invokeMethod(progress, [=](){
+                        progress->setValue(value);
+                        percentLabel->setText(QString::number(value) + "%");
+                        titleLabel->setText("当前视频标题：" + QString::fromStdString(title));
+                    });
+                };
+
+                // 解析m3u8文件占比20%，下载所有分片占比50%，合并所有分片占比30%
+                for(auto item: m3u8Urls) {
+                    bool success = true;
+                    // 解析m3u8文件
+                    m3u8Downloader m3u8_downloader(item);
+                    m3u8_downloader.parseM3U8();
+                    //m3u8_downloader.printInfo();
+                    updateProgress(20);
+
+                    basePath = basePath.back() == '/' ? basePath : basePath + '/';
+                    std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
+
+                    // 下载所有ts分片
+                    success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
+                    if (!success) {
+                        //这里可以做重新下载的操作
+                        std::cout << "当前线路失效，选择其他线路/n";
+                        updateProgress(0);
+                        continue;
+                    }
+                    // 将下载好的所有ts分片进行解密
+                    m3u8_downloader.DecryptAllTs(updateProgress);
+
+                    // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
+                    success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
+                    m3u8_downloader.DeleteTemplateFile();
+
+                    if (success) break;
+                    updateProgress(0); // 下载失败进度归零
+                }
+
+                // 下载完成后更新 UI（必须用主线程）
+                QMetaObject::invokeMethod(progress, [=]() {
+                    downloadBtn->setVisible(true);
+                    choosePathBtn->setVisible(true);
+                    progress->setVisible(false);
+                    percentLabel->setVisible(false);
+                    titleLabel->setText("下载完成：" + titleLabel->text().split("：").back());
+                });
             });
-        });
+        }
     });
 
     return app.exec();
