@@ -19,13 +19,6 @@
 #include <QUrl>
 #include <QHBoxLayout>
 
-// 更新进度
-void updateProgress(QProgressBar* progress, int value) {
-    QMetaObject::invokeMethod(progress, [=]() {
-        progress->setValue(value);
-    });
-}
-
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
@@ -145,34 +138,46 @@ int main(int argc, char *argv[]) {
                     std::cout << " - " << url << std::endl;
             }
 
+            // 进度回调函数
+            std::function<void(int)> updateProgress = [&](int value){
+                QMetaObject::invokeMethod(progress, [=](){
+                    progress->setValue(value);
+                });
+            };
+
+            // 解析m3u8文件占比20%，下载所有分片占比50%，合并所有分片占比30%
             for(auto item: m3u8Urls) {
+                bool success = true;
                 // 解析m3u8文件
                 m3u8Downloader m3u8_downloader(item);
                 m3u8_downloader.parseM3U8();
                 //m3u8_downloader.printInfo();
-                updateProgress(progress, 20);
+                updateProgress(20);
 
                 basePath = basePath.back() == '/' ? basePath : basePath + '/';
                 std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
 
                 // 下载所有ts分片
-                m3u8_downloader.DownloadAllSegments(dirPath);
-                updateProgress(progress, 60);
-
+                success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
+                if (!success) {
+                    //这里可以做重新下载的操作
+                    std::cout << "当前线路失效，选择其他线路/n";
+                    updateProgress(0);
+                    continue;
+                }
                 // 将下载好的所有ts分片进行解密
-                m3u8_downloader.DecryptAllTs();
-                updateProgress(progress, 90);
+                m3u8_downloader.DecryptAllTs(updateProgress);
+
                 // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
-                bool success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
+                success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
                 m3u8_downloader.DeleteTemplateFile();
 
                 if (success) break;
-                updateProgress(progress, 0);
+                updateProgress(0); // 下载失败进度归零
             }
 
             // 下载完成后更新 UI（必须用主线程）
             QMetaObject::invokeMethod(progress, [=]() {
-                progress->setValue(100);
                 downloadBtn->setVisible(true);
                 choosePathBtn->setVisible(true);
                 progress->setVisible(false);

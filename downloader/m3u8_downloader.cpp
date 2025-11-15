@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <openssl/aes.h>
 #include <curl/curl.h>
+#include <atomic>
 
 // 获取设备的逻辑核心数
 // 在I/O密集型操作中可以分配更多的虚拟核心，而在cpu计算密集型中不要超过物理核心数
@@ -63,10 +64,12 @@ bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::string
     return true;
 }
 
-void m3u8Downloader::DownloadAllSegments(std::string& dirPath) {
+// 新增进度回调
+bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack) {
+    std::atomic<bool> success{true};
     if (TsLinks.empty()) {
         std::cerr << "No TS segments to download!" << std::endl;
-        return;
+        return false;
     }
 
     ThreadPool pool(logical_cores);
@@ -75,17 +78,19 @@ void m3u8Downloader::DownloadAllSegments(std::string& dirPath) {
 
     std::cout << "Start downloading " << TsLinks.size() << " TS files..." << std::endl;
 
+    // 初始进度（当前项目占比50%）
+    std::atomic<int> doneCount = 0;
     for (size_t i = 0; i < TsLinks.size(); ++i) {
         std::string tsUrl = TsLinks[i];
         std::string outputFile = dirPath + "/segment_" + std::to_string(i) + ".ts";
         tsFiles.push_back(outputFile);
 
-        results.emplace_back(pool.enqueue([this, tsUrl, outputFile, i]() {
-            int count = 1; bool success = false;
+        results.emplace_back(pool.enqueue([=, &doneCount, &success]() {
+            int count = 1;
             success = this->DownloadTsSegment(tsUrl, outputFile);
 
             // 新增重试机制，确保能正确下载每一片分片
-            while(!success && count <= 3) {
+            while(!success && count++ <= 3) {
                 std::cout << "retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
                 success = this->DownloadTsSegment(tsUrl, outputFile);
             }
@@ -94,10 +99,16 @@ void m3u8Downloader::DownloadAllSegments(std::string& dirPath) {
             // TODO: 后续可以将下载失败的片段作出标记，然后在重试时至下载失败片段
             if (success) {
                 //std::cout << "download " << std::to_string(i) << " TS success path: " << outputFile << std::endl;
+                // 不要直接使用整数除法否则会造成值为0即进度不走的情况
+                // 不要使用序号，因为是并发执行，会导致进度条伸缩
+                // 不要频繁的回调进度否则会造成很大的性能开销
+                doneCount.fetch_add(1);
+                if(progressCallBack && doneCount.load() % 5 == 0) {
+                    progressCallBack(20 + static_cast<int>((doneCount.load() + 1) * 50.0 / TsLinks.size()));
+                }
             } else {
                 std::cerr << "download " << std::to_string(i) << " TS failed path: " << outputFile << std::endl;
                 std::filesystem::remove(outputFile);
-                return;
             }
         }));
     }
@@ -107,7 +118,10 @@ void m3u8Downloader::DownloadAllSegments(std::string& dirPath) {
         f.get();
     }
 
-    std::cout << "All TS segments downloaded." << std::endl;
+    if (success) {
+        std::cout << "All TS segments downloaded." << std::endl;
+    }
+    return success;
 }
 
 bool m3u8Downloader::parseM3U8() {
@@ -214,7 +228,7 @@ bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::stri
     return true;
 }
 
-void m3u8Downloader::DecryptAllTs() {
+void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     if (key.empty()) {
         key = FetchKey();
     }
@@ -223,17 +237,22 @@ void m3u8Downloader::DecryptAllTs() {
     ThreadPool pool(logical_cores >> 1);
     std::vector<std::future<std::string>> futures;
 
+    std::atomic<int> doneCount{0};
     for (size_t i = 0; i < tsFiles.size(); ++i) {
         std::string inputFile = tsFiles[i];
         std::string outputFile = inputFile.substr(0, inputFile.rfind("/") + 1) + "decrypt_" + std::to_string(i) + ".ts";
         decryptedFiles.push_back(outputFile);
 
-        futures.emplace_back(pool.enqueue([this, inputFile, outputFile]() {
+        futures.emplace_back(pool.enqueue([=, &doneCount]() {
             bool ok = DecryptTsFile(inputFile, outputFile);
             if (!ok) {
                 std::cerr << "[Error] Failed to decrypt " << inputFile << std::endl;
             } else {
                 //std::cout << "[Info] Decrypted " << inputFile << std::endl;
+                doneCount.fetch_add(1);
+                if(progressCallBack && doneCount.load() % 5 == 0) {
+                    progressCallBack(70 + static_cast<int>((doneCount.load() + 1) * 30.0 / tsFiles.size()));
+                }
             }
             return outputFile;
         }));
