@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
 
     // Label + 输入框
     QHBoxLayout *inputLayout = new QHBoxLayout();
-    QLabel *label = new QLabel("请输入 URL:");
+    QLabel *label = new QLabel("请输入 URLS:");
     QPlainTextEdit *urlInput = new QPlainTextEdit();
     // 设置输入框高度为两行
     QFontMetrics fm(urlInput->font());
@@ -68,6 +68,17 @@ int main(int argc, char *argv[]) {
     progressLayout->addWidget(progress);
     progressLayout->addWidget(percentLabel);
 
+    // 多任务时总进度（单个任务时不显示）
+    QProgressBar* totalProgress = new QProgressBar();
+    totalProgress->setRange(0, 100);
+    totalProgress->setValue(0);
+    totalProgress->setVisible(false);
+    QLabel* totalPercentLabel = new QLabel("0%");
+    totalPercentLabel->setVisible(false);
+    QHBoxLayout* totalProgressLayout = new QHBoxLayout();
+    totalProgressLayout->addWidget(totalProgress);
+    totalProgressLayout->addWidget(totalPercentLabel);
+
     // 下载路径提示 + 选择按钮
     QHBoxLayout *pathLayout = new QHBoxLayout();
     QLabel *tipLabel = new QLabel("（默认下载路径为桌面）");
@@ -86,6 +97,7 @@ int main(int argc, char *argv[]) {
     mainLayout->addSpacing(10);
     mainLayout->addWidget(titleLabel);
     mainLayout->addLayout(progressLayout);
+    mainLayout->addLayout(totalProgressLayout);
     mainLayout->addLayout(pathLayout);
 
     window.show();
@@ -119,13 +131,31 @@ int main(int argc, char *argv[]) {
         progress->setVisible(true);       // 显示进度条
         percentLabel->setVisible(true);   // 显示百分比
 
-        // 新增支持批量处理链接
         QString urlsInput = urlInput->toPlainText();
-        QStringList urlList;
+        if (urlsInput.isEmpty()) {
+            titleLabel->setText("请输入URl...");
+            downloadBtn->setVisible(true);
+            choosePathBtn->setVisible(true);
+            progress->setVisible(false);
+            percentLabel->setVisible(false);
+        }
+        // 新增支持批量处理链接
+        QStringList urlList; // 保存所有输入的url
         for (QString line : urlsInput.split('\n', Qt::SkipEmptyParts)) {
             line = line.trimmed();
             if (!line.isEmpty())
                 urlList << line;
+        }
+
+        // 把currentTasks放在堆上，避免在异步更新时过早释放
+        auto currentTasks = std::make_shared<std::atomic<int>>(0);
+        const int totalTasks = urlList.size();
+        // 多任务时显示总任务进度条
+        if (totalTasks > 1) {
+            totalProgress->setVisible(true);
+            totalPercentLabel->setVisible(true);
+            totalProgress->setValue(5);
+            totalPercentLabel->setText(QString::number(5) + "%");
         }
 
         // 设置下载路径
@@ -183,6 +213,7 @@ int main(int argc, char *argv[]) {
                     bool success = true;
                     // 解析m3u8文件
                     m3u8Downloader m3u8_downloader(item);
+                    updateProgress(10);
                     m3u8_downloader.parseM3U8();
                     //m3u8_downloader.printInfo();
                     updateProgress(20);
@@ -209,13 +240,30 @@ int main(int argc, char *argv[]) {
                     updateProgress(0); // 下载失败进度归零
                 }
 
-                // 下载完成后更新 UI（必须用主线程）
-                QMetaObject::invokeMethod(progress, [=]() {
-                    downloadBtn->setVisible(true);
-                    choosePathBtn->setVisible(true);
-                    progress->setVisible(false);
-                    percentLabel->setVisible(false);
+                // 下载完成后，更新总进度
+                currentTasks->fetch_add(1);
+                // 当前任务下载完成后更新 UI（必须用主线程以确保线程安全）
+                QMetaObject::invokeMethod(totalProgress, [=]() {
                     titleLabel->setText("下载完成：" + titleLabel->text().split("：").back());
+                    totalProgress->setValue(static_cast<int>(currentTasks->load() * 100.0 / totalTasks));
+                    totalPercentLabel->setText(QString::number(static_cast<int>(currentTasks->load() * 100.0 / totalTasks)) + "%");
+                    // 所有任务下载结束后隐藏进度条
+                    if (currentTasks->load() == totalTasks) {
+                        progress->setVisible(0);
+                        progress->setVisible(false);
+                        percentLabel->setVisible(false);
+                        percentLabel->setText(QString::number(0) + "%");
+                        totalProgress->setVisible(false);
+                        totalProgress->setValue(0);
+                        totalPercentLabel->setVisible(false);
+                        totalPercentLabel->setText(QString::number(0) + "%");
+                        // 修改titleLabel
+                        titleLabel->setText("所有任务下载完成");
+                        downloadBtn->setVisible(true);
+                        choosePathBtn->setVisible(true);
+                        // 清空输入框中内容
+                        urlInput->setPlainText("");
+                    }
                 });
             });
         }

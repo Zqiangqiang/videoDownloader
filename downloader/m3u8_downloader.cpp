@@ -66,6 +66,12 @@ bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::string
 
 // 新增进度回调
 bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack) {
+    // 提前获取key，确保下载完成后能直接解析
+    if (key.empty()) {
+        key = FetchKey();
+        std::cout << "DownloadAllSegment key's size: " << key.size() << std::endl;
+    }
+
     std::atomic<bool> success{true};
     if (TsLinks.empty()) {
         std::cerr << "No TS segments to download!" << std::endl;
@@ -90,8 +96,9 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
             success = this->DownloadTsSegment(tsUrl, outputFile);
 
             // 新增重试机制，确保能正确下载每一片分片
-            while(!success && count++ <= 3) {
+            while(!success && count++ <= 5) {
                 std::cout << "retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
                 success = this->DownloadTsSegment(tsUrl, outputFile);
             }
 
@@ -191,7 +198,12 @@ void m3u8Downloader::parseKey(const std::string& line) {
 
 std::vector<unsigned char> m3u8Downloader::FetchKey() {
     HttpClient client(uri_);
-    std::string keyStr = client.GetHtmlFromUrl();
+    // 新增重试机制，确保key能正确被获取
+    int retry = 3;
+    std::string keyStr;
+    while(keyStr.empty() && retry-- > 0) {
+        keyStr = client.GetHtmlFromUrl();
+    }
     return std::vector<unsigned char>(keyStr.begin(), keyStr.end()); // 转二进制
 }
 
@@ -216,21 +228,22 @@ bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::stri
 
     std::vector<unsigned char> inbuf(16);
     std::vector<unsigned char> outbuf(16);
-    iv = HexToBytes("0x" + iv_);    // 转换为子节序
+    if (iv.empty()) {
+        iv = HexToBytes("0x" + iv_);    // 转换为子节序
+    }
     std::vector<unsigned char> current_iv = iv;
-
     while (ifs.read(reinterpret_cast<char*>(inbuf.data()), 16) || ifs.gcount() > 0) {
         size_t bytesRead = ifs.gcount();
         AES_cbc_encrypt(inbuf.data(), outbuf.data(), bytesRead, &aesKey, current_iv.data(), AES_DECRYPT);
         ofs.write(reinterpret_cast<char*>(outbuf.data()), bytesRead);
     }
-
     return true;
 }
 
 void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     if (key.empty()) {
         key = FetchKey();
+        std::cout << "DecryptAllTS key's size: " << key.size() << std::endl;
     }
 
     decryptedFiles.clear();
@@ -252,6 +265,9 @@ void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
                 doneCount.fetch_add(1);
                 if(progressCallBack && doneCount.load() % 5 == 0) {
                     progressCallBack(70 + static_cast<int>((doneCount.load() + 1) * 30.0 / tsFiles.size()));
+                }
+                if (doneCount.load() == tsFiles.size()) {
+                    progressCallBack(100);
                 }
             }
             return outputFile;
