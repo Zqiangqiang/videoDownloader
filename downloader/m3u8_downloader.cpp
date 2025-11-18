@@ -71,7 +71,6 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
         key = FetchKey();
     }
 
-    std::atomic<bool> success{true};
     if (TsLinks.empty()) {
         std::cerr << "No TS segments to download!" << std::endl;
         return false;
@@ -88,10 +87,10 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
     for (size_t i = 0; i < TsLinks.size(); ++i) {
         std::string tsUrl = TsLinks[i];
         std::string outputFile = dirPath + "/segment_" + std::to_string(i) + ".ts";
-        tsFiles.push_back(outputFile);
+        tsFiles.emplace_back(outputFile);
 
-        results.emplace_back(pool.enqueue([=, &doneCount, &success]() {
-            int count = 1;
+        results.emplace_back(pool.enqueue([=, &doneCount]() {
+            int count = 1; bool success = true;
             success = this->DownloadTsSegment(tsUrl, outputFile);
 
             // 新增重试机制，确保能正确下载每一片分片
@@ -124,10 +123,14 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
         f.get();
     }
 
-    if (success) {
+    if (doneCount.load() == TsLinks.size()) {
+        // 下载完成后及时释放TsLinks，减少内存占用
+        TsLinks.clear();
         std::cout << "All TS segments downloaded." << std::endl;
+        return true;
+    } else {
+        return false;
     }
-    return success;
 }
 
 bool m3u8Downloader::parseM3U8() {
@@ -247,7 +250,7 @@ bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::stri
     return true;
 }
 
-void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
+bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     if (key.empty()) {
         key = FetchKey();
     }
@@ -260,7 +263,7 @@ void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     for (size_t i = 0; i < tsFiles.size(); ++i) {
         std::string inputFile = tsFiles[i];
         std::string outputFile = inputFile.substr(0, inputFile.rfind("/") + 1) + "decrypt_" + std::to_string(i) + ".ts";
-        decryptedFiles.push_back(outputFile);
+        decryptedFiles.emplace_back(outputFile);
 
         futures.emplace_back(pool.enqueue([=, &doneCount]() {
             bool ok = DecryptTsFile(inputFile, outputFile);
@@ -284,6 +287,13 @@ void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     for (auto& f : futures) {
         f.get();
     }
+
+    if (doneCount.load() == tsFiles.size()) {
+        tsFiles.clear();
+        return true;
+    } else {
+        return false;
+    }
 }
 
 bool m3u8Downloader::MergeToVideo(const std::string& outputFile) {
@@ -301,11 +311,16 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile) {
             return false;
         }
 
-        ofs << ifs.rdbuf(); // 直接拼接文件内容
+        // ofs << ifs.rdbuf();  // 直接读区整个文件内存占用较大，按分块（8K）处理
+        char buf[8192];
+        while (ifs.read(buf, sizeof(buf))) {
+            ofs.write(buf, ifs.gcount());
+        }
         ifs.close();
     }
 
     ofs.close();
+    decryptedFiles.clear();
     std::cout << "[Info] Successfully merged to " << outputFile << std::endl;
     return true;
 }

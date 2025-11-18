@@ -24,7 +24,7 @@ public:
     bool parseM3U8();
     void printInfo() const;
     bool DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack = nullptr);
-    void DecryptAllTs(std::function<void(int)> progressCallBack = nullptr);
+    bool DecryptAllTs(std::function<void(int)> progressCallBack = nullptr);
     bool MergeToVideo(const std::string& outputFile);
     void DeleteTemplateFile();
 
