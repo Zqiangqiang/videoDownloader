@@ -80,7 +80,7 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
     std::filesystem::create_directories(dirPath);
     std::vector<std::future<void>> results;
 
-    std::cout << "Start downloading " << TsLinks.size() << " TS files..." << std::endl;
+    std::cout << "[Download] Start downloading " << TsLinks.size() << " TS files..." << std::endl;
 
     // 初始进度（当前项目占比50%）
     std::atomic<int> doneCount = 0;
@@ -95,7 +95,7 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
 
             // 新增重试机制，确保能正确下载每一片分片
             while(!success && count++ <= 5) {
-                std::cout << "retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
+                std::cout << "[Download] retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
                 success = this->DownloadTsSegment(tsUrl, outputFile);
             }
@@ -112,7 +112,7 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
                     progressCallBack(20 + static_cast<int>((doneCount.load() + 1) * 40.0 / TsLinks.size()));
                 }
             } else {
-                std::cerr << "download " << std::to_string(i) << " TS failed path: " << outputFile << std::endl;
+                std::cerr << "[Download] " << std::to_string(i) << " TS failed path: " << outputFile << std::endl;
                 std::filesystem::remove(outputFile);
             }
         }));
@@ -126,7 +126,7 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
     if (doneCount.load() == TsLinks.size()) {
         // 下载完成后及时释放TsLinks，减少内存占用
         TsLinks.clear();
-        std::cout << "All TS segments downloaded." << std::endl;
+        std::cout << "[Download] All TS segments downloaded. "  << dirPath << std::endl;
         return true;
     } else {
         return false;
@@ -168,14 +168,10 @@ bool m3u8Downloader::parseM3U8() {
 }
 
 void m3u8Downloader::printInfo () const {
-    std::cout << "METHOD: " << key_ << std::endl;
-    std::cout << "URI: " << uri_ << std::endl;
-    std::cout << "IV: " << iv_ << std::endl;
-    std::cout << "Total TS files: " << TsLinks.size() << std::endl;
-
-    for (size_t i = 0; i < TsLinks.size(); ++i) {
-        std::cout << i + 1 << ": " << TsLinks[i] << std::endl;
-    }
+    std::cout << "[PrintInfo] METHOD: " << key_ << std::endl;
+    std::cout << "[PrintInfo] URI: " << uri_ << std::endl;
+    std::cout << "[PrintInfo] IV: " << iv_ << std::endl;
+    std::cout << "[PrintInfo] Total TS files: " << TsLinks.size() << std::endl;
 }
 
 void m3u8Downloader::parseKey(const std::string& line) {
@@ -262,6 +258,7 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     std::atomic<int> doneCount{0};
     for (size_t i = 0; i < tsFiles.size(); ++i) {
         std::string inputFile = tsFiles[i];
+        // #TODO：路径中如果存在一些'/'就会出现问题
         std::string outputFile = inputFile.substr(0, inputFile.rfind("/") + 1) + "decrypt_" + std::to_string(i) + ".ts";
         decryptedFiles.emplace_back(outputFile);
 
@@ -328,9 +325,10 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile, std::function<v
         std::filesystem::path transformed = tsPath;
         //replace_extension操作会修改原对象
         transformed.replace_extension(Format2String(format));
+        std::filesystem::remove(transformed);
         // 使用ffmpeg进行容器转换(允许路径中包含空白字符)
         // 可以使用caffeinate -i 命令来制定执行时避免休眠而中断
-        std::string cmd = "ffmpeg -i \"" + outputFile + "\" -c copy \"" + transformed.c_str() + "\"";
+        std::string cmd = "ffmpeg -y -i \"" + outputFile + "\" -c copy \"" + transformed.c_str() + "\"";
         system(cmd.c_str()); // 同步执行
         // 删除默认TS格式
         std::filesystem::remove(tsPath);

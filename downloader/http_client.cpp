@@ -99,8 +99,7 @@ std::vector<std::string> HttpClient::ExtractLinkOfM3U8(const std::string& html) 
 
 std::string HttpClient::ExtractTitle(const std::string& html)
 {
-    std::regex pattern(R"(<div[^>]*class=["']videoDes["'][^>]*>(.*?)<\/div>)",
-                       std::regex::icase);
+    std::regex pattern(R"(<div[^>]*class=["']videoDes["'][^>]*>(.*?)<\/div>)", std::regex::icase);
     std::smatch match;
 
     if (std::regex_search(html, match, pattern))

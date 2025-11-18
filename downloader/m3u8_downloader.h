@@ -20,6 +20,13 @@ public:
             baseUrl = extractBaseUrl(url); // 自动提取域名
         }
     }
+    ~m3u8Downloader() {
+        TsLinks.clear();
+        tsFiles.clear();
+        decryptedFiles.clear();
+        key.clear();
+        iv.clear();
+    };
 
     // 常见video格式
     enum class VideoFormat{ TS = 0, MP4, MKV, MOV};
@@ -37,7 +44,6 @@ public:
 
         return m3u8Downloader::VideoFormat::TS;
     }
-
     inline std::string Format2String(const VF format) {
         switch (format) {
             case VF::TS: return ".ts";

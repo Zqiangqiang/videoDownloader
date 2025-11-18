@@ -6,8 +6,6 @@
 #include "m3u8_downloader.h"
 
 #include <QApplication>
-#include <QWidget>
-#include <QVBoxLayout>
 #include <QtConcurrent>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -19,7 +17,7 @@
 #include <QUrl>
 #include <QPlainTextEdit>
 #include <QStringList>
-#include <QHBoxLayout>
+#include <QFontMetrics>
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -49,11 +47,12 @@ int main(int argc, char *argv[]) {
     QLabel *titleLabel = new QLabel("当前视频标题：");
     titleLabel->setVisible(false);
     // 允许自动换行
-    titleLabel->setWordWrap(true);
-    // 限制最大宽度，让它不会撑开窗口
-    titleLabel->setMaximumWidth(480);
-    // 设置文本超出自动换行
-    titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    titleLabel->setWordWrap(false);
+    // 超出 QLabel 的部分自动隐藏，不换行
+    titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    // 设置 QLabel 的固定高度为一行字体高度
+    QFontMetrics font(titleLabel->font());
+    titleLabel->setFixedHeight(font.height());
 
     // 进度条
     QProgressBar *progress = new QProgressBar();
@@ -173,11 +172,18 @@ int main(int argc, char *argv[]) {
             QtConcurrent::run([=]() {
                 HttpClient hClient(url.toStdString());
                 std::string html = hClient.GetHtmlFromUrl();
+                if (html.empty()) {
+                    // 重新在请求一次
+                    html = hClient.GetHtmlFromUrl();
+                }
                 std::string title = HttpClient::ExtractTitle(html);
+                std::cout << "[Title] " << title << std::endl;
 
                 // UI 修改需要切回主线程
                 QMetaObject::invokeMethod(titleLabel, [titleLabel, title]() {
                     titleLabel->setText("当前视频标题：" + QString::fromStdString(title));
+                    // 鼠标悬浮显示完整标题
+                    titleLabel->setToolTip(QString::fromStdString(title));
                 });
 
                 std::string basePath = downloadPath.toStdString();
@@ -188,14 +194,14 @@ int main(int argc, char *argv[]) {
                 }
 
                 // 方案二: 通过m3u8文件下载分片后合成完整视频
-                std::cout << "Extracting m3u8 links..." << std::endl;
+                std::cout << "[QConcurrent] Extracting m3u8 links..." << std::endl;
                 auto m3u8Urls = hClient.ExtractLinkOfM3U8(html);
 
                 if (m3u8Urls.empty()) {
-                    std::cout << "No m3u8 links found." << std::endl;
+                    std::cerr << "[Parse m3u8] No m3u8 links found." << std::endl;
                     return -1;
                 } else {
-                    std::cout << "Found m3u8 URLs:\n";
+                    std::cout << "[Parse m3u8] Found m3u8 URLs:\n";
                     for (const auto& url : m3u8Urls)
                         std::cout << " - " << url << std::endl;
                 }
@@ -218,7 +224,7 @@ int main(int argc, char *argv[]) {
                     m3u8_downloader.parseM3U8();
                     //m3u8_downloader.printInfo();
                     updateProgress(20);
-
+                    // 目录名为video的证明title没有获取到
                     basePath = basePath.back() == '/' ? basePath : basePath + '/';
                     std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
 
@@ -226,7 +232,7 @@ int main(int argc, char *argv[]) {
                     success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
                     if (!success) {
                         //这里可以做重新下载的操作
-                        std::cerr << "当前线路失效，选择其他线路/n";
+                        std::cerr << "当前线路失效，选择其他线路" << std::endl;
                         updateProgress(0);
                         continue;
                     }
