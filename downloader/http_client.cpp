@@ -4,9 +4,31 @@
 
 #include "http_client.h"
 #include <curl/curl.h>
-#include <regex>
 #include <iostream>
 #include <filesystem>
+
+std::string getSystemHttpProxy() {
+    FILE* pipe = popen("networksetup -getwebproxy 'Wi-Fi'", "r");
+    if (!pipe) return "";
+    char buffer[128];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+
+    // 解析 IP 和端口
+    std::regex ipPortRegex(R"(Server: (.+)\nPort: (\d+))");
+    std::smatch match;
+    if (std::regex_search(result, match, ipPortRegex)) {
+        std::string proxy = match[1].str() + ":" + match[2].str();
+        std::cout << "[Proxy] System proxy " << proxy << std::endl;
+        return proxy;
+    }
+    return "";
+}
+
+const static std::string proxy = getSystemHttpProxy();
 
 // libcurl 写回调，把HTTP响应写入string
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -46,7 +68,10 @@ std::string HttpClient::GetHtmlFromUrl() {
         // 临时关闭ssl校验
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-
+        // 添加本地代理
+        if (!proxy.empty()) {
+            curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+        }
         // 一些常见网站可能需要模拟浏览器 UA
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
                          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
@@ -55,7 +80,7 @@ std::string HttpClient::GetHtmlFromUrl() {
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
-            std::cerr << "curl_easy_perform() failed: "
+            std::cerr << "[Curl] curl_easy_perform() failed: "
                       << curl_easy_strerror(res) << std::endl;
         }
 

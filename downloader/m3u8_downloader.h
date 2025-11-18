@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <regex>
+#include <__filesystem/filesystem_error.h>
 
 // 实现对m3u8中分片ts文件的下载
 class m3u8Downloader {
@@ -55,14 +56,14 @@ public:
 
     bool parseM3U8();
     void printInfo() const;
-    bool DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack = nullptr);
+    bool DownloadAllSegments(const std::filesystem::path& dirPath, std::function<void(int)> progressCallBack = nullptr);
     bool DecryptAllTs(std::function<void(int)> progressCallBack = nullptr);
-    bool MergeToVideo(const std::string& outputFile, std::function<void(int)> progressCallBack = nullptr, m3u8Downloader::VideoFormat format = m3u8Downloader::VideoFormat::TS);
+    bool MergeToVideo(const std::filesystem::path& outputFile, std::function<void(int)> progressCallBack = nullptr, m3u8Downloader::VideoFormat format = m3u8Downloader::VideoFormat::TS);
     void DeleteTemplateFile();
 
 private:
     void parseKey(const std::string& line);
-    bool DownloadTsSegment(const std::string& url, const std::string& outputPath);
+    bool DownloadTsSegment(const std::string& url, const std::filesystem::path& outputFile);
     static std::string extractBaseUrl(const std::string& fullUrl) {
         std::regex pattern(R"((https?:\/\/[^\/]+))");
         std::smatch match;
@@ -73,7 +74,7 @@ private:
     //从链接中获取到实际的解密key
     std::vector<unsigned char> FetchKey();
     std::vector<unsigned char> HexToBytes(const std::string& hex);
-    bool DecryptTsFile(const std::string& inputFile, const std::string& outputFile);
+    bool DecryptTsFile(const std::filesystem::path& inputFile, const std::filesystem::path& outputFile);
 
 private:
     const std::string m3u8Link;

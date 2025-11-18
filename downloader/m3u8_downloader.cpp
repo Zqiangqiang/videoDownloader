@@ -24,7 +24,7 @@ size_t WriteFileCallback(void* ptr, size_t size, size_t nmemb, void* stream) {
 }
 
 // 确保每片ts文件都能被正确下载，否则在合并时会造成合并结果无法播放
-bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::string& outputPath) {
+bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::filesystem::path& outputPath) {
     CURL* curl = curl_easy_init();
     if (!curl) return false;
 
@@ -52,7 +52,7 @@ bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::string
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
     if (res != CURLE_OK) {
-        std::cerr << "[Error] Download failed: " << outputPath
+        std::cerr << "[Segment] Download failed: " << outputPath
               << " - " << curl_easy_strerror(res)
               << ", HTTP code: " << response_code
               << std::endl;
@@ -65,14 +65,14 @@ bool m3u8Downloader::DownloadTsSegment(const std::string& url, const std::string
 }
 
 // 新增进度回调
-bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack) {
+bool m3u8Downloader::DownloadAllSegments(const std::filesystem::path& dirPath, std::function<void(int)> progressCallBack) {
     // 提前获取key，确保下载完成后能直接解析
     if (key.empty()) {
         key = FetchKey();
     }
 
     if (TsLinks.empty()) {
-        std::cerr << "No TS segments to download!" << std::endl;
+        std::cerr << "[Download] No TS segments to download!" << std::endl;
         return false;
     }
 
@@ -86,21 +86,22 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
     std::atomic<int> doneCount = 0;
     for (size_t i = 0; i < TsLinks.size(); ++i) {
         std::string tsUrl = TsLinks[i];
-        std::string outputFile = dirPath + "/segment_" + std::to_string(i) + ".ts";
+        std::filesystem::path temp = dirPath;
+        std::string outputFile = temp.append("segment_" + std::to_string(i) + ".ts");
         tsFiles.emplace_back(outputFile);
 
         results.emplace_back(pool.enqueue([=, &doneCount]() {
-            int count = 1; bool success = true;
+            int count = 0; bool success = true;
             success = this->DownloadTsSegment(tsUrl, outputFile);
 
             // 新增重试机制，确保能正确下载每一片分片
-            while(!success && count++ <= 5) {
+            while(!success && count++ < 5) {
                 std::cout << "[Download] retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
                 success = this->DownloadTsSegment(tsUrl, outputFile);
             }
 
-            // 3次重试后仍失败，直接退出下载
+            // 5次重试后仍失败，直接退出下载
             // TODO: 后续可以将下载失败的片段作出标记，然后在重试时至下载失败片段
             if (success) {
                 //std::cout << "download " << std::to_string(i) << " TS success path: " << outputFile << std::endl;
@@ -138,7 +139,7 @@ bool m3u8Downloader::parseM3U8() {
     std::string content = client.GetHtmlFromUrl();
 
     if (content.empty()) {
-        std::cerr << "Failed to download m3u8 file: " << m3u8Link << std::endl;
+        std::cerr << "[ParseM3U8] Failed to download m3u8 file: " << m3u8Link << std::endl;
         return false;
     }
 
@@ -160,7 +161,7 @@ bool m3u8Downloader::parseM3U8() {
                 // 相对路径补全
                 tsUrl = baseUrl + "/" + tsUrl;
             }
-            TsLinks.push_back(tsUrl);
+            TsLinks.emplace_back(tsUrl);
         }
     }
 
@@ -216,7 +217,7 @@ std::vector<unsigned char> m3u8Downloader::HexToBytes(const std::string& hex) {
 }
 
 // AES-128-CBC 解密单个 TS 文件
-bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::string& outputFile) {
+bool m3u8Downloader::DecryptTsFile(const std::filesystem::path& inputFile, const std::filesystem::path& outputFile) {
     // 仅仅只是打开文件，当开始read的时候才开始读区数据
     std::ifstream ifs(inputFile, std::ios::binary);
     std::ofstream ofs(outputFile, std::ios::binary);
@@ -257,15 +258,15 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
 
     std::atomic<int> doneCount{0};
     for (size_t i = 0; i < tsFiles.size(); ++i) {
-        std::string inputFile = tsFiles[i];
-        // #TODO：路径中如果存在一些'/'就会出现问题
-        std::string outputFile = inputFile.substr(0, inputFile.rfind("/") + 1) + "decrypt_" + std::to_string(i) + ".ts";
+        std::filesystem::path inputPath(tsFiles[i]);
+        // 不要使用字符串拼接，直接使用std::fileSystem::path
+        std::string outputFile = inputPath.parent_path().append("decrypt_" + std::to_string(i) + ".ts");
         decryptedFiles.emplace_back(outputFile);
 
         futures.emplace_back(pool.enqueue([=, &doneCount]() {
-            bool ok = DecryptTsFile(inputFile, outputFile);
+            bool ok = DecryptTsFile(inputPath.c_str(), outputFile);
             if (!ok) {
-                std::cerr << "[Error] Failed to decrypt " << inputFile << std::endl;
+                std::cerr << "[Decrypt] Failed to decrypt " << inputPath << std::endl;
             } else {
                 //std::cout << "[Info] Decrypted " << inputFile << std::endl;
                 doneCount.fetch_add(1);
@@ -292,10 +293,10 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     }
 }
 
-bool m3u8Downloader::MergeToVideo(const std::string& outputFile, std::function<void(int)> progressCallBack, m3u8Downloader::VideoFormat format) {
+bool m3u8Downloader::MergeToVideo(const std::filesystem::path& outputFile, std::function<void(int)> progressCallBack, m3u8Downloader::VideoFormat format) {
     std::ofstream ofs(outputFile, std::ios::binary);
     if (!ofs) {
-        std::cerr << "[Error] Cannot open output file: " << outputFile << std::endl;
+        std::cerr << "[Merge] Cannot open output file: " << outputFile << std::endl;
         return false;
     }
 
@@ -304,7 +305,7 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile, std::function<v
     for (const auto& decryptedFile : decryptedFiles) {
         std::ifstream ifs(decryptedFile, std::ios::binary);
         if (!ifs) {
-            std::cerr << "[Error] Cannot open decrypted file: " << decryptedFile << std::endl;
+            std::cerr << "[Merge] Cannot open decrypted file: " << decryptedFile << std::endl;
             return false;
         }
 
@@ -328,8 +329,9 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile, std::function<v
         std::filesystem::remove(transformed);
         // 使用ffmpeg进行容器转换(允许路径中包含空白字符)
         // 可以使用caffeinate -i 命令来制定执行时避免休眠而中断
-        std::string cmd = "ffmpeg -y -i \"" + outputFile + "\" -c copy \"" + transformed.c_str() + "\"";
-        system(cmd.c_str()); // 同步执行
+        char outputpath[2048] = {0};
+        snprintf("ffmpeg -y -i \"%s\" -c copy \"%s\"", sizeof(outputpath), outputFile.c_str(), transformed.c_str());
+        system(outputpath); // 同步执行
         // 删除默认TS格式
         std::filesystem::remove(tsPath);
     }

@@ -172,21 +172,40 @@ int main(int argc, char *argv[]) {
             QtConcurrent::run([=]() {
                 HttpClient hClient(url.toStdString());
                 std::string html = hClient.GetHtmlFromUrl();
-                if (html.empty()) {
+                int count = 0;
+                while (html.empty() && count++ < 3) {
                     // 重新在请求一次
                     html = hClient.GetHtmlFromUrl();
                 }
-                std::string title = HttpClient::ExtractTitle(html);
+
+                if(count == 3) {
+                    // 回到主线程更新 UI
+                    QMetaObject::invokeMethod(titleLabel, [=]() {
+                        titleLabel->setText("网络故障，请稍后再试...");
+                        choosePathBtn->setVisible(true);
+                        downloadBtn->setVisible(true);
+                    });
+                    return 1;
+                };
+
+                std::string rawTitle = !HttpClient::ExtractTitle(html).empty() ? HttpClient::ExtractTitle(html) : "no_title";
+                std::string title;
+                // 标题中不允许存在'/'
+                for(auto& ch: rawTitle) {
+                    if (ch == '/') {
+                        title.push_back('|');
+                    } else {
+                        title.push_back(ch);
+                    }
+                }
                 std::cout << "[Title] " << title << std::endl;
 
                 // UI 修改需要切回主线程
                 QMetaObject::invokeMethod(titleLabel, [titleLabel, title]() {
                     titleLabel->setText("当前视频标题：" + QString::fromStdString(title));
                     // 鼠标悬浮显示完整标题
-                    titleLabel->setToolTip(QString::fromStdString(title));
+                    //titleLabel->setToolTip(QString::fromStdString(title));
                 });
-
-                std::string basePath = downloadPath.toStdString();
 
                 if (html.empty()) {
                     std::cerr << "Failed to fetch HTML." << std::endl;
@@ -212,9 +231,11 @@ int main(int argc, char *argv[]) {
                         progress->setValue(value);
                         percentLabel->setText(QString::number(value) + "%");
                         titleLabel->setText("当前视频标题：" + QString::fromStdString(title));
+                        //titleLabel->setToolTip(QString::fromStdString(title));
                     });
                 };
 
+                std::filesystem::path basePath(downloadPath.toStdString());
                 // 解析m3u8文件占比20%，下载所有分片占比40%，合并所有分片占比30%，格式转换占比10%
                 for(auto item: m3u8Urls) {
                     bool success = true;
@@ -224,15 +245,14 @@ int main(int argc, char *argv[]) {
                     m3u8_downloader.parseM3U8();
                     //m3u8_downloader.printInfo();
                     updateProgress(20);
-                    // 目录名为video的证明title没有获取到
-                    basePath = basePath.back() == '/' ? basePath : basePath + '/';
-                    std::string dirPath = title.empty() ? basePath + "video" : basePath + title;
+                    // 目录不要拼接，否则路径中包含'/'时会出错
+                    std::filesystem::path dirPath = basePath.append(title);
 
                     // 下载所有ts分片
-                    success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
+                    success = m3u8_downloader.DownloadAllSegments( dirPath.c_str(), updateProgress);
                     if (!success) {
                         //这里可以做重新下载的操作
-                        std::cerr << "当前线路失效，选择其他线路" << std::endl;
+                        std::cerr << "[DownloadSegment] 当前线路失效，选择其他线路" << std::endl;
                         updateProgress(0);
                         continue;
                     }
@@ -246,7 +266,7 @@ int main(int argc, char *argv[]) {
 
                     // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
                     // 默认格式是将合并后的TS转换为MP4，如有需要可传参
-                    success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts", updateProgress, m3u8Downloader::VideoFormat::MP4);
+                    success = m3u8_downloader.MergeToVideo(dirPath.append(title + ".ts"), updateProgress, m3u8Downloader::VideoFormat::MP4);
                     m3u8_downloader.DeleteTemplateFile();
 
                     if (success) break;
