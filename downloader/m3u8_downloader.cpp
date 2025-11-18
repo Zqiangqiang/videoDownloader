@@ -330,7 +330,8 @@ bool m3u8Downloader::MergeToVideo(const std::filesystem::path& outputFile, std::
         // 使用ffmpeg进行容器转换(允许路径中包含空白字符)
         // 可以使用caffeinate -i 命令来制定执行时避免休眠而中断
         char outputpath[2048] = {0};
-        snprintf("ffmpeg -y -i \"%s\" -c copy \"%s\"", sizeof(outputpath), outputFile.c_str(), transformed.c_str());
+        snprintf(outputpath, sizeof(outputpath), "ffmpeg -y -i \"%s\" -c copy \"%s\"", outputFile.c_str(), transformed.c_str());
+        std::cout << "[FFmpeg] " << outputpath << std::endl;
         system(outputpath); // 同步执行
         // 删除默认TS格式
         std::filesystem::remove(tsPath);
@@ -345,10 +346,8 @@ void m3u8Downloader::DeleteTemplateFile() {
     for(auto item: tsFiles) {
         std::filesystem::remove(item);
     }
-    tsFiles.clear();
 
     for(auto item: decryptedFiles) {
         std::filesystem::remove(item);
     }
-    decryptedFiles.clear();
 }
