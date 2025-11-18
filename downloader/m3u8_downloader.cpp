@@ -69,7 +69,6 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
     // 提前获取key，确保下载完成后能直接解析
     if (key.empty()) {
         key = FetchKey();
-        std::cout << "DownloadAllSegment key's size: " << key.size() << std::endl;
     }
 
     std::atomic<bool> success{true};
@@ -219,6 +218,7 @@ std::vector<unsigned char> m3u8Downloader::HexToBytes(const std::string& hex) {
 
 // AES-128-CBC 解密单个 TS 文件
 bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::string& outputFile) {
+    // 仅仅只是打开文件，当开始read的时候才开始读区数据
     std::ifstream ifs(inputFile, std::ios::binary);
     std::ofstream ofs(outputFile, std::ios::binary);
     if (!ifs || !ofs) return false;
@@ -234,8 +234,15 @@ bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::stri
     std::vector<unsigned char> current_iv = iv;
     while (ifs.read(reinterpret_cast<char*>(inbuf.data()), 16) || ifs.gcount() > 0) {
         size_t bytesRead = ifs.gcount();
-        AES_cbc_encrypt(inbuf.data(), outbuf.data(), bytesRead, &aesKey, current_iv.data(), AES_DECRYPT);
-        ofs.write(reinterpret_cast<char*>(outbuf.data()), bytesRead);
+        // AES CBC 只能解密满块的部分
+        if (bytesRead == 16) {
+            AES_cbc_encrypt(inbuf.data(), outbuf.data(), 16, &aesKey, current_iv.data(), AES_DECRYPT);
+            ofs.write(reinterpret_cast<char*>(outbuf.data()), 16);
+        }
+        else {
+            // TS 文件不是 AES-PKCS7，剩余不足 16 字节的部分无需解密，直接写原文
+            ofs.write(reinterpret_cast<char*>(inbuf.data()), bytesRead);
+        }
     }
     return true;
 }
@@ -243,7 +250,6 @@ bool m3u8Downloader::DecryptTsFile(const std::string& inputFile, const std::stri
 void m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     if (key.empty()) {
         key = FetchKey();
-        std::cout << "DecryptAllTS key's size: " << key.size() << std::endl;
     }
 
     decryptedFiles.clear();

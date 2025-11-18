@@ -154,8 +154,9 @@ int main(int argc, char *argv[]) {
         if (totalTasks > 1) {
             totalProgress->setVisible(true);
             totalPercentLabel->setVisible(true);
-            totalProgress->setValue(5);
-            totalPercentLabel->setText(QString::number(5) + "%");
+            int initialProgress = 100.0 / totalTasks < 5.0 ? 100.0 / totalTasks : 5;
+            totalProgress->setValue(initialProgress);
+            totalPercentLabel->setText(QString::number(initialProgress) + "%");
         }
 
         // 设置下载路径
