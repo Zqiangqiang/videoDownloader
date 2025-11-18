@@ -21,11 +21,37 @@ public:
         }
     }
 
+    // 常见video格式
+    enum class VideoFormat{ TS = 0, MP4, MKV, MOV};
+
+    using VF = m3u8Downloader::VideoFormat;
+    // inline函数不适成员函数，属于类外函数
+    inline VF GetFormatFromExtension(const std::string& ext) {
+        std::string e = ext;
+        std::transform(e.begin(), e.end(), e.begin(), ::tolower);
+
+        if (e == "ts") return m3u8Downloader::VideoFormat::TS;
+        if (e == "mp4") return m3u8Downloader::VideoFormat::MP4;
+        if (e == "mkv") return m3u8Downloader::VideoFormat::MKV;
+        if (e == "mov") return m3u8Downloader::VideoFormat::MOV;
+
+        return m3u8Downloader::VideoFormat::TS;
+    }
+
+    inline std::string Format2String(const VF format) {
+        switch (format) {
+            case VF::TS: return ".ts";
+            case VF::MP4: return ".mp4";
+            case VF::MKV: return ".mkv";
+            case VF::MOV: return ".mov";
+        }
+    }
+
     bool parseM3U8();
     void printInfo() const;
     bool DownloadAllSegments(std::string& dirPath, std::function<void(int)> progressCallBack = nullptr);
     bool DecryptAllTs(std::function<void(int)> progressCallBack = nullptr);
-    bool MergeToVideo(const std::string& outputFile);
+    bool MergeToVideo(const std::string& outputFile, std::function<void(int)> progressCallBack = nullptr, m3u8Downloader::VideoFormat format = m3u8Downloader::VideoFormat::TS);
     void DeleteTemplateFile();
 
 private:

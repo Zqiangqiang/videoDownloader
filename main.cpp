@@ -209,7 +209,7 @@ int main(int argc, char *argv[]) {
                     });
                 };
 
-                // 解析m3u8文件占比20%，下载所有分片占比50%，合并所有分片占比30%
+                // 解析m3u8文件占比20%，下载所有分片占比40%，合并所有分片占比30%，格式转换占比10%
                 for(auto item: m3u8Urls) {
                     bool success = true;
                     // 解析m3u8文件
@@ -226,15 +226,21 @@ int main(int argc, char *argv[]) {
                     success = m3u8_downloader.DownloadAllSegments(dirPath, updateProgress);
                     if (!success) {
                         //这里可以做重新下载的操作
-                        std::cout << "当前线路失效，选择其他线路/n";
+                        std::cerr << "当前线路失效，选择其他线路/n";
                         updateProgress(0);
                         continue;
                     }
+
                     // 将下载好的所有ts分片进行解密
-                    m3u8_downloader.DecryptAllTs(updateProgress);
+                    success = m3u8_downloader.DecryptAllTs(updateProgress);
+                    if(!success) {
+                        std::cerr << "Decrypt TS failed" << std::endl;
+                        continue;
+                    }
 
                     // 将所有分片和并为完整视频，如需转换格式，则需要使用ffmpeg
-                    success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts");
+                    // 默认格式是将合并后的TS转换为MP4，如有需要可传参
+                    success = m3u8_downloader.MergeToVideo(basePath + title + "/" + title + ".ts", updateProgress, m3u8Downloader::VideoFormat::MP4);
                     m3u8_downloader.DeleteTemplateFile();
 
                     if (success) break;
@@ -250,7 +256,7 @@ int main(int argc, char *argv[]) {
                     totalPercentLabel->setText(QString::number(static_cast<int>(currentTasks->load() * 100.0 / totalTasks)) + "%");
                     // 所有任务下载结束后隐藏进度条
                     if (currentTasks->load() == totalTasks) {
-                        progress->setVisible(0);
+                        progress->setValue(0);
                         progress->setVisible(false);
                         percentLabel->setVisible(false);
                         percentLabel->setText(QString::number(0) + "%");

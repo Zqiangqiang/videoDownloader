@@ -109,7 +109,7 @@ bool m3u8Downloader::DownloadAllSegments(std::string& dirPath, std::function<voi
                 // 不要频繁的回调进度否则会造成很大的性能开销
                 doneCount.fetch_add(1);
                 if(progressCallBack && doneCount.load() % 5 == 0) {
-                    progressCallBack(20 + static_cast<int>((doneCount.load() + 1) * 50.0 / TsLinks.size()));
+                    progressCallBack(20 + static_cast<int>((doneCount.load() + 1) * 40.0 / TsLinks.size()));
                 }
             } else {
                 std::cerr << "download " << std::to_string(i) << " TS failed path: " << outputFile << std::endl;
@@ -273,10 +273,10 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
                 //std::cout << "[Info] Decrypted " << inputFile << std::endl;
                 doneCount.fetch_add(1);
                 if(progressCallBack && doneCount.load() % 5 == 0) {
-                    progressCallBack(70 + static_cast<int>((doneCount.load() + 1) * 30.0 / tsFiles.size()));
+                    progressCallBack(60 + static_cast<int>((doneCount.load() + 1) * 30.0 / tsFiles.size()));
                 }
                 if (doneCount.load() == tsFiles.size()) {
-                    progressCallBack(100);
+                    progressCallBack(90);
                 }
             }
             return outputFile;
@@ -289,14 +289,13 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
     }
 
     if (doneCount.load() == tsFiles.size()) {
-        tsFiles.clear();
         return true;
     } else {
         return false;
     }
 }
 
-bool m3u8Downloader::MergeToVideo(const std::string& outputFile) {
+bool m3u8Downloader::MergeToVideo(const std::string& outputFile, std::function<void(int)> progressCallBack, m3u8Downloader::VideoFormat format) {
     std::ofstream ofs(outputFile, std::ios::binary);
     if (!ofs) {
         std::cerr << "[Error] Cannot open output file: " << outputFile << std::endl;
@@ -304,6 +303,7 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile) {
     }
 
     // 按照解密后的顺序合并，避免乱序
+    // 合并占50%，转换占50%
     for (const auto& decryptedFile : decryptedFiles) {
         std::ifstream ifs(decryptedFile, std::ios::binary);
         if (!ifs) {
@@ -313,15 +313,30 @@ bool m3u8Downloader::MergeToVideo(const std::string& outputFile) {
 
         // ofs << ifs.rdbuf();  // 直接读区整个文件内存占用较大，按分块（8K）处理
         char buf[8192];
-        while (ifs.read(buf, sizeof(buf))) {
+        // read()函数只有在读取满缓冲区后才回返回true，这会导致最后一部分未被写入
+        while (ifs) {
+            ifs.read(buf, sizeof(buf));
             ofs.write(buf, ifs.gcount());
         }
         ifs.close();
     }
-
     ofs.close();
-    decryptedFiles.clear();
-    std::cout << "[Info] Successfully merged to " << outputFile << std::endl;
+
+    if (format != m3u8Downloader::VideoFormat::TS) {
+        progressCallBack(95);
+        std::filesystem::path tsPath = outputFile;
+        std::filesystem::path transformed = tsPath;
+        //replace_extension操作会修改原对象
+        transformed.replace_extension(Format2String(format));
+        // 使用ffmpeg进行容器转换(允许路径中包含空白字符)
+        // 可以使用caffeinate -i 命令来制定执行时避免休眠而中断
+        std::string cmd = "ffmpeg -i \"" + outputFile + "\" -c copy \"" + transformed.c_str() + "\"";
+        system(cmd.c_str()); // 同步执行
+        // 删除默认TS格式
+        std::filesystem::remove(tsPath);
+    }
+    progressCallBack(100);
+
     return true;
 }
 
@@ -330,8 +345,10 @@ void m3u8Downloader::DeleteTemplateFile() {
     for(auto item: tsFiles) {
         std::filesystem::remove(item);
     }
+    tsFiles.clear();
 
     for(auto item: decryptedFiles) {
         std::filesystem::remove(item);
     }
+    decryptedFiles.clear();
 }
