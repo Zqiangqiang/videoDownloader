@@ -413,6 +413,13 @@ bool m3u8Downloader::DecryptAllTs(std::function<void(int)> progressCallBack) {
 
         futures.emplace_back(pool.enqueue([=, &doneCount]() {
             bool ok = DecryptTsFile(inputPath.c_str(), outputFile);
+
+            int count = 0;
+            while (!ok && count++ < 3) {
+                ok = DecryptTsFile(inputPath.c_str(), outputFile);
+                std::cerr << "[Decrypt] Retry " << std::to_string(count) << " times decrypt " << inputPath << std::endl;
+            }
+
             if (!ok) {
                 std::cerr << "[Decrypt] Failed to decrypt " << inputPath << std::endl;
             } else {
