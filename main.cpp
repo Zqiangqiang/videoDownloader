@@ -257,6 +257,8 @@ int main(int argc, char *argv[]) {
                         continue;
                     }
 
+                    // 重复视频跳过解密
+                    if (m3u8_downloader.isRepeat.load()) continue;
                     // 将下载好的所有ts分片进行解密
                     success = m3u8_downloader.DecryptAllTs(updateProgress);
                     if(!success) {

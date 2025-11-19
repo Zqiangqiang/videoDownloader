@@ -7,8 +7,15 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <regex>
+#include <iomanip>
+#include <sstream>
 #include <__filesystem/filesystem_error.h>
+#include <openssl/sha.h>
+
+// 计算文件hash值
+std::string sha256(const std::vector<unsigned char>& data);
 
 // 实现对m3u8中分片ts文件的下载
 class m3u8Downloader {
@@ -27,10 +34,12 @@ public:
         decryptedFiles.clear();
         key.clear();
         iv.clear();
+        videoHashMap.clear();
     };
 
     // 常见video格式
     enum class VideoFormat{ TS = 0, MP4, MKV, MOV};
+    std::atomic<bool> isRepeat = false; // 当前视频是否重复
 
     using VF = m3u8Downloader::VideoFormat;
     // inline函数不适成员函数，属于类外函数
@@ -88,6 +97,8 @@ private:
     // key 和 iv 均需要使用长度为16子节
     std::vector<unsigned char> key;  // AES key
     std::vector<unsigned char> iv;   // AES IV
+    std::unordered_map<std::string, std::filesystem::path> videoHashMap; // [videohash, outputPath]
+    std::mutex mapMutex;
 };
 
 #endif //M3U8_DOWNLOADER_H

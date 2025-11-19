@@ -13,10 +13,67 @@
 #include <openssl/aes.h>
 #include <curl/curl.h>
 #include <atomic>
+#include <qhash.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // 获取设备的逻辑核心数
 // 在I/O密集型操作中可以分配更多的虚拟核心，而在cpu计算密集型中不要超过物理核心数
 const unsigned int logical_cores = std::thread::hardware_concurrency();
+// 文件操作锁
+static std::mutex fileMutex;
+
+// 使用mmap技术读文件
+std::vector<unsigned char> mmapReadFile(const std::string& filePath) {
+    int fd = open(filePath.c_str(), O_RDONLY);
+    if (fd == -1) {
+        perror("open");
+        return {};
+    }
+
+    // 获取文件大小
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        perror("fstat");
+        close(fd);
+        return {};
+    }
+    size_t fileSize = st.st_size;
+
+    // 映射文件到内存
+    void* mapped = mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+        return {};
+    }
+
+    // 拷贝到 vector
+    unsigned char* start = static_cast<unsigned char*>(mapped);
+    std::vector<unsigned char> buffer(start, start + fileSize);
+
+    // 解除映射
+    if (munmap(mapped, fileSize) == -1) {
+        perror("munmap");
+    }
+
+    close(fd);
+    return buffer;
+}
+
+std::string sha256(const std::vector<unsigned char>& data) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(data.data(), data.size(), hash);
+
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        out << std::setw(2) << (int)hash[i];
+    }
+    return out.str();
+}
 
 size_t WriteFileCallback(void* ptr, size_t size, size_t nmemb, void* stream) {
     FILE* fp = (FILE*)stream;
@@ -84,31 +141,118 @@ bool m3u8Downloader::DownloadAllSegments(const std::filesystem::path& dirPath, s
 
     // 初始进度（当前项目占比50%）
     std::atomic<int> doneCount = 0;
+    std::atomic<bool> repeat(false);
+    // atomic不支持std::string
+    std::array<std::string, 3> before3Hashes;
+    std::mutex hashMutex;
     for (size_t i = 0; i < TsLinks.size(); ++i) {
         std::string tsUrl = TsLinks[i];
         std::filesystem::path temp = dirPath;
         std::string outputFile = temp.append("segment_" + std::to_string(i) + ".ts");
         tsFiles.emplace_back(outputFile);
 
-        results.emplace_back(pool.enqueue([=, &doneCount]() {
+        results.emplace_back(pool.enqueue([=, &doneCount, &before3Hashes, &hashMutex, &repeat]() {
+            if (repeat.load(std::memory_order_acquire)) {
+                // 如果已经确定有重复，直接跳过后续分片的下载
+                return;
+            }
+
             int count = 0; bool success = true;
             success = this->DownloadTsSegment(tsUrl, outputFile);
-
             // 新增重试机制，确保能正确下载每一片分片
             while(!success && count++ < 5) {
                 std::cout << "[Download] retry " << std::to_string(count) << " times file: " << outputFile << std::endl;
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if (repeat.load(std::memory_order_acquire)) return;
                 success = this->DownloadTsSegment(tsUrl, outputFile);
+                if (repeat.load(std::memory_order_acquire)) return;
             }
 
             // 5次重试后仍失败，直接退出下载
             // TODO: 后续可以将下载失败的片段作出标记，然后在重试时至下载失败片段
             if (success) {
-                //std::cout << "download " << std::to_string(i) << " TS success path: " << outputFile << std::endl;
+                // 通过前3片Ts文件混合计算hash来进行文件去重
+                if (i < 3) {
+                    // 使用mmap读文件减小内存开销
+                    std::string h = sha256(mmapReadFile(outputFile));
+                    std::lock_guard<std::mutex> locker(hashMutex);
+                    before3Hashes[i] = h;
+                }
+
+                {
+                    std::unique_lock<std::mutex> locker(hashMutex);
+                    if (!before3Hashes[0].empty() && !before3Hashes[1].empty() && !before3Hashes[2].empty()) {
+                        locker.unlock();
+
+                        // 仅保留一个线程计算Fingerprint，其余线程直接退出
+                        if (repeat.load(std::memory_order_acquire)) return;
+
+                        // 计算最终指纹
+                        std::string combined;
+                        combined.reserve(64 * 3);
+
+                        locker.lock();
+                        for (auto& hash: before3Hashes) {
+                            combined.append(hash);
+                        }
+                        locker.unlock();
+
+                        std::string Fingerprint = sha256(std::vector<unsigned char>(combined.begin(), combined.end()));
+
+                        // 典型模式：发布者 / 订阅者
+                        if (!repeat.load(std::memory_order_acquire)) {
+                            std::unique_lock<std::mutex> mapLocker(mapMutex);
+                            auto it = videoHashMap.find(Fingerprint);
+                            mapLocker.unlock();
+
+                            if (it != videoHashMap.end()) {
+                                // 将目录名更长的更新到已下载目录上
+                                std::filesystem::path exitPath =  it->second;
+                                if (exitPath != dirPath) {
+                                    std::string exitDirName = exitPath.filename();
+                                    std::string currDirName = dirPath.filename();
+                                    if (exitDirName.size() >= currDirName.size()) {
+                                        // 通知其他线程repeat更新情况
+                                        repeat.store(true, std::memory_order_release);
+                                        isRepeat = true;
+                                        progressCallBack(60);
+                                    } else {
+                                        std::unique_lock<std::mutex> fileLocker(fileMutex);
+                                        std::filesystem::rename(exitPath, dirPath);
+                                        fileLocker.unlock();
+
+                                        std::filesystem::path originFileName;
+                                        for (auto enty: std::filesystem::directory_iterator(exitPath)) {
+                                            if (enty.is_regular_file()) {
+                                                originFileName = enty.path();
+                                                break;
+                                            }
+                                        }
+                                        std::filesystem::path temp = exitPath;
+                                        std::filesystem::path newFileName = temp.append(currDirName);
+
+                                        fileLocker.lock();
+                                        std::filesystem::rename(originFileName, newFileName);
+                                        fileLocker.unlock();
+                                    }
+                                    return ;
+                                } else {
+                                    // 避免同一任务中的不同线程误认为自己是重复视频
+                                    // 此处什么也不做直接返回
+                                }
+                            } else {
+                                std::unique_lock<std::mutex> mapLocker(mapMutex);
+                                videoHashMap.insert({Fingerprint, dirPath});
+                                mapLocker.unlock();
+                            }
+                        }
+                    }
+                }
+
                 // 不要直接使用整数除法否则会造成值为0即进度不走的情况
-                // 不要使用序号，因为是并发执行，会导致进度条伸缩
+                // 不要使用序号算进度，因为是并发执行，会导致进度条伸缩
                 // 不要频繁的回调进度否则会造成很大的性能开销
-                doneCount.fetch_add(1);
+                doneCount.fetch_add(1, std::memory_order_relaxed);
                 if(progressCallBack && doneCount.load() % 5 == 0) {
                     progressCallBack(20 + static_cast<int>((doneCount.load() + 1) * 40.0 / TsLinks.size()));
                 }
@@ -124,10 +268,14 @@ bool m3u8Downloader::DownloadAllSegments(const std::filesystem::path& dirPath, s
         f.get();
     }
 
-    if (doneCount.load() == TsLinks.size()) {
+    if (doneCount.load() == TsLinks.size() && !repeat.load(std::memory_order_acquire)) {
         // 下载完成后及时释放TsLinks，减少内存占用
         TsLinks.clear();
         std::cout << "[Download] All TS segments downloaded. "  << dirPath << std::endl;
+        return true;
+    } else if (repeat.load(std::memory_order_acquire)) {
+        std::filesystem::remove_all(dirPath);
+        std::cout << "[RepeatVideo] Remove repeated video " << dirPath << std::endl;
         return true;
     } else {
         return false;
