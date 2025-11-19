@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
                     QMetaObject::invokeMethod(titleLabel, [=]() {
                         titleLabel->setText("网络故障，请稍后再试...");
                         choosePathBtn->setVisible(true);
-                        downloadBtn->setVisible(true);
+                        if (totalTasks <= 1) downloadBtn->setVisible(true);
                     });
                     return 1;
                 };
@@ -279,6 +279,12 @@ int main(int argc, char *argv[]) {
                 currentTasks->fetch_add(1);
                 // 当前任务下载完成后更新 UI（必须用主线程以确保线程安全）
                 QMetaObject::invokeMethod(totalProgress, [=]() {
+                    // 移除输入框中下载成功的连接
+                    QString content = urlInput->toPlainText();
+                    content.replace(url + "\n", "");  // 删除整行
+                    content.replace(url, "");        // 防止末尾无换行
+                    urlInput->setPlainText(content);
+
                     titleLabel->setText("下载完成：" + titleLabel->text().split("：").back());
                     totalProgress->setValue(static_cast<int>(currentTasks->load() * 100.0 / totalTasks));
                     totalPercentLabel->setText(QString::number(static_cast<int>(currentTasks->load() * 100.0 / totalTasks)) + "%");
